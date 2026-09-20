@@ -35,7 +35,7 @@ examples:
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        prog="trajcontacts",
+        prog="trajcontacts2",
         description=(
             "Calculate residue-residue contacts from MD trajectories or PDB "
             "structures. Two residues are in contact in a frame when the "
@@ -45,7 +45,7 @@ def build_parser():
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--version", action="version", version=f"trajcontacts {__version__}")
+    parser.add_argument("--version", action="version", version=f"trajcontacts2 {__version__}")
 
     req = parser.add_argument_group("input (required)")
     req.add_argument(
