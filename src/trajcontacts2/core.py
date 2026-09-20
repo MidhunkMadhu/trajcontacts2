@@ -283,14 +283,27 @@ def _frame_chunk_bounds(n_frames, chunk):
     return [(s, min(s + chunk, n_frames)) for s in range(0, n_frames, chunk)]
 
 
-def _choose_chunk_sizes(n_frames, n_pairs, memory_budget):
-    """Pick frame-chunk and pair-block sizes that respect a memory budget."""
+def _choose_chunk_sizes(n_frames, n_pairs, memory_budget, n_processes=1):
+    """Pick frame-chunk and pair-block sizes that respect a memory budget.
+
+    ``memory_budget`` is a TOTAL scratch budget, not a per-chunk one. When a
+    pool of ``n_processes`` workers is used, up to that many chunks can be
+    in flight at once, so the per-chunk budget is ``memory_budget /
+    n_processes``: worst case, all workers are busy simultaneously.
+    Without this division, ``-n`` had no effect on the memory bound at all
+    -- a run with many more chunks than a single chunk's budget assumed
+    could use ``n_processes`` times the intended memory (observed in
+    practice: a 78-chunk run with ``-n 128`` used ~150GB against a 2GB
+    per-chunk target).
+    """
     n_pairs = max(int(n_pairs), 1)
+    n_processes = max(1, int(n_processes))
     # Scratch is dominated by (frame_chunk x pair_block) float64 arrays; a few
     # of those exist at once, hence the divisor.
     per_frame_pair = 8.0 * 6.0
     pair_block = min(n_pairs, 500_000)
-    frame_chunk = int(memory_budget / (per_frame_pair * pair_block))
+    per_worker_budget = memory_budget / n_processes
+    frame_chunk = int(per_worker_budget / (per_frame_pair * pair_block))
     frame_chunk = max(1, min(frame_chunk, n_frames if n_frames else 1))
     return frame_chunk, pair_block
 
@@ -319,6 +332,8 @@ def compute_contact_counts(
         Apply the minimum-image convention when the trajectory has a unit cell.
     n_processes : int
         Worker processes.  Only used when the platform supports ``fork``.
+        ``memory_budget`` is divided across these, since that many chunks
+        can be processed concurrently.
     prefilter : bool
         Enable the exact geometric prefilter.
     progress : callable or None
@@ -342,7 +357,7 @@ def compute_contact_counts(
         periodic = False
 
     frame_chunk, pair_block = _choose_chunk_sizes(
-        traj.n_frames, len(pairs), memory_budget
+        traj.n_frames, len(pairs), memory_budget, n_processes=n_processes
     )
     bounds = _frame_chunk_bounds(traj.n_frames, frame_chunk)
 

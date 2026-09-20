@@ -179,8 +179,10 @@ usually makes little difference; raise it for very large systems, where the
 pair list rather than the kernel is the bottleneck.
 
 Memory is bounded by `--memory` (2 GB of scratch by default) rather than by
-trajectory length. For trajectories too large to load at all, use `--stride`,
-or split the analysis across `-f` segments.
+trajectory length. This is a total budget shared across `-n` worker
+processes, not a per-worker one, so raising `-n` does not raise peak memory.
+For trajectories too large to load at all, use `--stride`, or split the
+analysis across `-f` segments.
 
 ## Migrating from 0.1.x
 

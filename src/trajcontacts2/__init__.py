@@ -7,7 +7,7 @@ cutoff (4-5 A). Contacts that persist for a majority of the simulation time
 network analysis.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from .core import (  # noqa: F401
     ContactResult,

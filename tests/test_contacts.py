@@ -12,6 +12,7 @@ import mdtraj as md
 import pytest
 
 from trajcontacts2.core import (
+    _choose_chunk_sizes,
     compute_contact_counts,
     describe_residues,
     heavy_atom_indices,
@@ -118,6 +119,37 @@ def test_multiprocessing_matches_serial(traj):
         traj, pairs, 0.45, n_processes=2, memory_budget=50_000
     )
     np.testing.assert_array_equal(serial.counts, parallel.counts)
+
+
+def test_memory_budget_is_divided_across_processes():
+    """Regression test for a real OOM: a 6-trajectory, 72000-frame, 299
+    residue run with -n 128 produced 78 chunks, all dispatched at once since
+    78 < 128. Each chunk was independently sized to the full memory_budget
+    (2GB default), so actual peak usage was ~78x that -- ~150GB against a
+    25GB SLURM request. memory_budget must bound TOTAL concurrent scratch,
+    not each chunk's alone.
+    """
+    n_frames, n_pairs, n_processes = 72_000, 44_551, 128
+    budget = 2_000_000_000
+    per_frame_pair = 8.0 * 6.0
+
+    frame_chunk_serial, pair_block = _choose_chunk_sizes(
+        n_frames, n_pairs, budget, n_processes=1
+    )
+    frame_chunk_pool, pair_block_pool = _choose_chunk_sizes(
+        n_frames, n_pairs, budget, n_processes=n_processes
+    )
+    assert pair_block_pool == pair_block
+
+    n_chunks = -(-n_frames // frame_chunk_pool)
+    concurrent = min(n_processes, n_chunks)
+    total_scratch = concurrent * frame_chunk_pool * pair_block_pool * per_frame_pair
+    assert total_scratch <= budget * 1.05, (
+        f"{concurrent} concurrent chunks x {frame_chunk_pool} frames would "
+        f"use {total_scratch / 1e9:.1f}GB against a {budget / 1e9:.1f}GB budget"
+    )
+    # dividing the budget must actually shrink chunks relative to n_processes=1
+    assert frame_chunk_pool <= frame_chunk_serial
 
 
 @pytest.mark.parametrize("cutoff", [0.35, 0.45, 0.60])

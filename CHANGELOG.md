@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1
+
+### Fixed
+- `--memory` was applied per chunk, not as a total budget: with `n_processes`
+  workers, up to that many chunks could run concurrently, each independently
+  sized to the full budget. A 6-trajectory, 72000-frame, 299-residue run with
+  `-n 128` produced 78 chunks -- all dispatched at once, at ~2GB each -- and
+  was OOM-killed at ~150GB against a 25GB request. `_choose_chunk_sizes` now
+  divides `memory_budget` by `n_processes`, so total concurrent scratch stays
+  within the requested budget regardless of worker count.
+
 ## 0.3.0
 
 Renamed the project `trajcontacts` -> `trajcontacts2` (package, import name and
