@@ -31,5 +31,5 @@ jobs:
 
       - name: Check the CLI is installed and runnable
         run: |
-          trajcontacts --version
-          trajcontacts --help
+          trajcontacts2 --version
+          trajcontacts2 --help

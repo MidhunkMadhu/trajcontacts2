@@ -1,4 +1,4 @@
-"""trajcontacts: residue-residue contacts from MD trajectories and PDB structures.
+"""trajcontacts2: residue-residue contacts from MD trajectories and PDB structures.
 
 A pair of residues is defined to be in contact in a given frame when the
 shortest distance between any two of their non-hydrogen atoms falls within a
@@ -7,7 +7,7 @@ cutoff (4-5 A). Contacts that persist for a majority of the simulation time
 network analysis.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .core import (  # noqa: F401
     ContactResult,

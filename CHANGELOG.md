@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0
+
+Renamed the project `trajcontacts` -> `trajcontacts2` (package, import name and
+console command). There is no compatibility shim for the old name.
+
+### Added
+- `-f/--trajectory` accepts multiple files (`-f run1.nc run2.nc run3.nc`),
+  concatenated in the given order into one trajectory before the contact
+  calculation, for replicate runs or restart segments sharing a topology.
+- A single `-f` argument that is not itself a recognised trajectory file is
+  read instead as a text list of trajectory paths, one per line (`#` comments
+  allowed, relative paths resolve against the list file's directory), so many
+  segments can be named without a long command line.
+
 ## 0.2.0
 
 Same contact definition, same science, substantially faster and safer. On a

@@ -3,8 +3,8 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "trajcontacts"
-version = "0.2.0"
+name = "trajcontacts2"
+version = "0.3.0"
 description = "Residue-residue contacts from MD trajectories and PDB structures"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -46,13 +46,13 @@ dependencies = [
 test = ["pytest>=7.0"]
 
 [project.urls]
-Homepage = "https://github.com/MidhunkMadhu/trajcontacts"
-Source = "https://github.com/MidhunkMadhu/trajcontacts"
-Issues = "https://github.com/MidhunkMadhu/trajcontacts/issues"
+Homepage = "https://github.com/MidhunkMadhu/trajcontacts2"
+Source = "https://github.com/MidhunkMadhu/trajcontacts2"
+Issues = "https://github.com/MidhunkMadhu/trajcontacts2/issues"
 Group = "https://home.iiserb.ac.in/~rkm/"
 
 [project.scripts]
-trajcontacts = "trajcontacts.cli:main"
+trajcontacts2 = "trajcontacts2.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

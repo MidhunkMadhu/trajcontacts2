@@ -1,4 +1,4 @@
-"""Tests for trajcontacts.
+"""Tests for trajcontacts2.
 
 The key test is :func:`test_matches_bruteforce_reference`, which checks the
 optimised implementation against a transcription of the original 0.1.x
@@ -11,7 +11,7 @@ import numpy as np
 import mdtraj as md
 import pytest
 
-from trajcontacts.core import (
+from trajcontacts2.core import (
     compute_contact_counts,
     describe_residues,
     heavy_atom_indices,
@@ -202,7 +202,7 @@ def test_missing_unitcell_warns_and_falls_back():
 
 
 def test_cli_end_to_end(tmp_path):
-    from trajcontacts.cli import main
+    from trajcontacts2.cli import main
 
     traj = _make_traj(n_res=10, n_frames=4)
     pdb = tmp_path / "system.pdb"
@@ -225,3 +225,68 @@ def test_cli_end_to_end(tmp_path):
     archive = np.load(tmp_path / "result.npz")
     assert archive["counts"].shape[0] == archive["pairs"].shape[0]
     assert int(archive["n_frames"]) == 4
+
+
+def _save_segments(tmp_path, n_res=8, n_frames=6, split=3):
+    """A reference topology plus two trajectory segments that together cover
+    ``n_frames`` frames, for testing multi-file -f handling."""
+    traj = _make_traj(n_res=n_res, n_frames=n_frames)
+    topology_pdb = tmp_path / "system.pdb"
+    traj[:1].save_pdb(str(topology_pdb))
+    seg1 = tmp_path / "seg1.pdb"
+    seg2 = tmp_path / "seg2.pdb"
+    traj[:split].save_pdb(str(seg1))
+    traj[split:].save_pdb(str(seg2))
+    return topology_pdb, seg1, seg2, n_frames
+
+
+def test_cli_accepts_multiple_trajectory_files(tmp_path):
+    from trajcontacts2.cli import main
+
+    topology_pdb, seg1, seg2, n_frames = _save_segments(tmp_path)
+    code = main([
+        "-p", str(topology_pdb), "-f", str(seg1), str(seg2), "-s", "all", "-q",
+        "-o", str(tmp_path / "contact.dat"), "-x", str(tmp_path / "pairs.dat"),
+        "-y", str(tmp_path / "counts.dat"), "-z", str(tmp_path / "frac.dat"),
+        "--numeric-out", "none", "--npz", str(tmp_path / "multi.npz"),
+    ])
+    assert code == 0
+    archive = np.load(tmp_path / "multi.npz")
+    assert int(archive["n_frames"]) == n_frames
+
+
+def test_cli_accepts_trajectory_list_file(tmp_path):
+    from trajcontacts2.cli import main
+
+    topology_pdb, seg1, seg2, n_frames = _save_segments(tmp_path)
+    listfile = tmp_path / "segments.txt"
+    listfile.write_text(f"# trajectory segments, one per line\n{seg1.name}\n{seg2.name}\n")
+
+    code = main([
+        "-p", str(topology_pdb), "-f", str(listfile), "-s", "all", "-q",
+        "-o", str(tmp_path / "contact.dat"), "-x", str(tmp_path / "pairs.dat"),
+        "-y", str(tmp_path / "counts.dat"), "-z", str(tmp_path / "frac.dat"),
+        "--numeric-out", "none", "--npz", str(tmp_path / "list.npz"),
+    ])
+    assert code == 0
+    archive = np.load(tmp_path / "list.npz")
+    assert int(archive["n_frames"]) == n_frames
+
+
+def test_list_file_with_missing_entry_errors(tmp_path):
+    from trajcontacts2.cli import main
+
+    topology_pdb, seg1, _seg2, _n_frames = _save_segments(tmp_path)
+    listfile = tmp_path / "segments.txt"
+    listfile.write_text(f"{seg1.name}\nno_such_file.xtc\n")
+
+    with pytest.raises(SystemExit):
+        main(["-p", str(topology_pdb), "-f", str(listfile), "-s", "all", "-q"])
+
+
+def test_resolve_trajectory_files():
+    from trajcontacts2.cli import build_parser, resolve_trajectory_files
+
+    parser = build_parser()
+    assert resolve_trajectory_files(["a.pdb", "b.xtc"], parser) == ["a.pdb", "b.xtc"]
+    assert resolve_trajectory_files(["run.dcd"], parser) == "run.dcd"

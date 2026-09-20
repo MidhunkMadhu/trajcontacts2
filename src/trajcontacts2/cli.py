@@ -14,16 +14,22 @@ from . import __version__
 EPILOG = """\
 examples:
   # contacts from a single PDB structure
-  trajcontacts -p 3sn6.pdb -f 3sn6.pdb
+  trajcontacts2 -p 3sn6.pdb -f 3sn6.pdb
 
   # a solvated trajectory, protein only, 4 A cutoff, skip i to i+2 neighbours
-  trajcontacts -p system.prmtop -f prod.nc -c 4.0 --min-separation 3 -n 8
+  trajcontacts2 -p system.prmtop -f prod.nc -c 4.0 --min-separation 3 -n 8
 
   # analyse every 10th frame of a long trajectory
-  trajcontacts -p system.gro -f prod.xtc --stride 10
+  trajcontacts2 -p system.gro -f prod.xtc --stride 10
 
   # keep only contacts present in at least 75% of frames, as an edge list
-  trajcontacts -p ref.pdb -f traj.dcd -a 75 --min-fraction 0.75
+  trajcontacts2 -p ref.pdb -f traj.dcd -a 75 --min-fraction 0.75
+
+  # several trajectory segments/replicates, concatenated and analysed as one
+  trajcontacts2 -p system.prmtop -f run1.nc run2.nc run3.nc
+
+  # same, but the segments are named in a text file, one path per line
+  trajcontacts2 -p system.prmtop -f segments.txt
 """
 
 
@@ -48,10 +54,14 @@ def build_parser():
              "MDTraj can read)",
     )
     req.add_argument(
-        "-f", "--trajectory", dest="trajectory", required=True, metavar="FILE",
-        help="coordinate/trajectory file (.nc/.xtc/.dcd/.gro/.pdb or any "
+        "-f", "--trajectory", dest="trajectory", required=True, nargs="+",
+        metavar="FILE [FILE ...]",
+        help="coordinate/trajectory file(s) (.nc/.xtc/.dcd/.gro/.pdb or any "
              "format MDTraj can read). Pass the same file as -p to analyse a "
-             "single PDB structure.",
+             "single PDB structure. Multiple files are concatenated into one "
+             "trajectory, in the order given. A single argument that is not "
+             "itself a recognised trajectory file is instead read as a text "
+             "list of trajectory paths, one per line ('#' comments allowed).",
     )
 
     sel = parser.add_argument_group("system selection")
@@ -177,10 +187,80 @@ def build_parser():
     return parser
 
 
+_TRAJECTORY_EXTENSIONS = {
+    ".pdb", ".pdb.gz", ".xtc", ".trr", ".dcd", ".h5", ".hdf5", ".lh5",
+    ".netcdf", ".nc", ".ncrst", ".crd", ".mdcrd", ".dtr", ".binpos",
+    ".xyz", ".xyz.gz", ".gro", ".tng", ".rst7", ".restrt", ".xml",
+    ".arc", ".lammpstrj",
+}
+
+
+def _looks_like_trajectory(path):
+    lower = path.lower()
+    return any(lower.endswith(ext) for ext in _TRAJECTORY_EXTENSIONS)
+
+
+def _read_list_file(path):
+    """Parse a text file of trajectory paths, one per line, '#' comments allowed.
+
+    Relative entries are resolved against the list file's own directory, so
+    the list can be moved together with the trajectories it names.
+    """
+    base = os.path.dirname(os.path.abspath(path))
+    entries = []
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            if not os.path.isabs(line) and not os.path.exists(line):
+                line = os.path.join(base, line)
+            entries.append(line)
+    return entries
+
+
+def resolve_trajectory_files(paths, parser):
+    """Expand -f/--trajectory into what :func:`mdtraj.load` should receive.
+
+    ``paths`` is one or more command-line arguments. Several arguments are
+    taken as trajectory files to concatenate directly. A single argument
+    whose extension is not a recognised trajectory format is instead read as
+    a text file listing one trajectory path per line, so that many segments
+    or replicates can be named without a very long command line.
+    """
+    if len(paths) > 1:
+        return list(paths)
+
+    path = paths[0]
+    if _looks_like_trajectory(path):
+        return path
+
+    try:
+        with open(path, "rb") as handle:
+            chunk = handle.read(8192)
+        chunk.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return path
+
+    entries = _read_list_file(path)
+    if not entries:
+        return path
+
+    missing = [e for e in entries if not os.path.exists(e)]
+    if missing:
+        parser.error(
+            f"-f/--trajectory: {path!r} looks like a trajectory list file, "
+            f"but lists missing file(s): {', '.join(missing)}"
+        )
+    return entries
+
+
 def _validate(args, parser):
-    for label, path in (("-p/--parmtop", args.topology), ("-f/--trajectory", args.trajectory)):
+    if not os.path.exists(args.topology):
+        parser.error(f"-p/--parmtop: file not found: {args.topology}")
+    for path in args.trajectory:
         if not os.path.exists(path):
-            parser.error(f"{label}: file not found: {path}")
+            parser.error(f"-f/--trajectory: file not found: {path}")
     if args.cutoff <= 0:
         parser.error("-c/--cutoff must be positive")
     if not 0.0 <= args.cutpercent <= 100.0:
@@ -211,8 +291,18 @@ def main(argv=None):
     from . import io as tc_io
 
     started = time.time()
-    _log(args.quiet, f"Reading {args.trajectory} (topology: {args.topology}) ...")
-    traj = md.load(args.trajectory, top=args.topology, stride=args.stride)
+    trajectory_input = resolve_trajectory_files(args.trajectory, parser)
+    if isinstance(trajectory_input, list) and len(trajectory_input) > 1:
+        _log(
+            args.quiet,
+            f"Reading {len(trajectory_input)} trajectory files "
+            f"(topology: {args.topology}) ...",
+        )
+        for path in trajectory_input:
+            _log(args.quiet, f"  {path}")
+    else:
+        _log(args.quiet, f"Reading {trajectory_input} (topology: {args.topology}) ...")
+    traj = md.load(trajectory_input, top=args.topology, stride=args.stride)
 
     end = args.end if args.end is not None else traj.n_frames
     if args.begin or end != traj.n_frames:
