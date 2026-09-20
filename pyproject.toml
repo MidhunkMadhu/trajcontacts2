@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trajcontacts"
+version = "0.2.0"
+description = "Residue-residue contacts from MD trajectories and PDB structures"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Midhun K Madhu", email = "midhunkmadhu14@gmail.com" },
+]
+maintainers = [
+    { name = "Midhun K Madhu", email = "midhunkmadhu14@gmail.com" },
+]
+keywords = [
+    "molecular-dynamics",
+    "contact-map",
+    "structural-biology",
+    "mdtraj",
+    "protein",
+    "network-analysis",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "mdtraj>=1.9.7",
+    "numpy>=1.20",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/MidhunkMadhu/trajcontacts"
+Source = "https://github.com/MidhunkMadhu/trajcontacts"
+Issues = "https://github.com/MidhunkMadhu/trajcontacts/issues"
+Group = "https://home.iiserb.ac.in/~rkm/"
+
+[project.scripts]
+trajcontacts = "trajcontacts.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

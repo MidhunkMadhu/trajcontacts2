@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+.idea/
+.vscode/
+.DS_Store
+
+# default output files
+contact.dat
+contactResNames.dat
+contactMatrixResFrames.dat
+contactMatrixFraction.dat
+contact_num_only.dat
