@@ -30,7 +30,35 @@ examples:
 
   # same, but the segments are named in a text file, one path per line
   trajcontacts2 -p system.prmtop -f segments.txt
+
+  # continuous (semi-Gaussian) contact matrix instead of the binary one
+  trajcontacts2 -p system.prmtop -f prod.nc -m continuous
+
+  # binary and continuous from one pass, trajcontacts 1.0.1 compatible
+  trajcontacts2 -p top.pdb -f traj.dcd -s all -m both --legacy-rounding
+
+  # Westerlund et al. 2020 semi-binary map (sigma 1.38 A, no PBC)
+  trajcontacts2 -p top.pdb -f traj.dcd -s protein -m cont --sigma 1.38 \\
+      --no-periodic --condensed-out semi_bin.txt
 """
+
+_MODE_ALIASES = {
+    "binary": "binary",
+    "norm": "binary",
+    "continuous": "continuous",
+    "cont": "continuous",
+    "both": "both",
+}
+
+
+def _parse_mode(value):
+    mode = _MODE_ALIASES.get(str(value).lower())
+    if mode is None:
+        raise argparse.ArgumentTypeError(
+            f"invalid choice: {value!r} (choose from binary, continuous, both; "
+            "'norm' and 'cont' are accepted as aliases)"
+        )
+    return mode
 
 
 def build_parser():
@@ -107,9 +135,63 @@ def build_parser():
              "the unweighted adjacency matrix (default: %(default)s)",
     )
     calc.add_argument(
+        "-m", "--mode", dest="mode", type=_parse_mode, default="binary",
+        metavar="{binary,continuous,both}",
+        help="contact definition: 'binary' (in contact or not, the default), "
+             "'continuous' (semi-Gaussian weight, see below), or 'both' from a "
+             "single distance pass. 'norm' and 'cont' are accepted as aliases, "
+             "as in trajcontacts 1.0.1.",
+    )
+    calc.add_argument(
         "--no-periodic", dest="periodic", action="store_false",
         help="disable the minimum-image convention. Periodic distances are "
              "used by default when the trajectory carries a unit cell.",
+    )
+
+    cont = parser.add_argument_group(
+        "continuous contacts (-m continuous/both)",
+        "Per frame, the weight of a residue pair is 1 when its minimum\n"
+        "heavy-atom distance d is <= the cutoff c, and\n"
+        "exp(-(d^2 - c^2) / (2 sigma^2)) beyond it. The mean weight over\n"
+        "frames is written as a weighted adjacency matrix.",
+    )
+    cont.add_argument(
+        "-d", "--dmax", dest="dmax", type=float, default=8.0, metavar="A",
+        help="distance in angstrom at which the weight has decayed to -k "
+             "(default: %(default)s). Sets sigma = sqrt((c^2 - dmax^2) / "
+             "(2 ln k)).",
+    )
+    cont.add_argument(
+        "-k", "--kval", dest="kval", type=float, default=1e-5, metavar="K",
+        help="weight at -d/--dmax, between 0 and 1 (default: %(default)s)",
+    )
+    cont.add_argument(
+        "--sigma", dest="sigma", type=float, default=None, metavar="A",
+        help="Gaussian width in angstrom; overrides -d/--dmax and -k/--kval "
+             "(e.g. 1.38 for Westerlund et al. 2020). Default: derived from "
+             "-d and -k (1.378 A with the default -c/-d/-k).",
+    )
+    cont.add_argument(
+        "--legacy-rounding", dest="legacy_rounding", action="store_true",
+        help="evaluate the weight exactly as trajcontacts 1.0.1 did, rounding "
+             "each per-frame weight to 4 decimals",
+    )
+    cont.add_argument(
+        "-w", "--cmatfract-cont", "--cmatfract_cont", dest="cont_matrix_out",
+        default="contactMatrixFraction_continuous.dat", metavar="FILE",
+        help="matrix of mean continuous weights (default: %(default)s). "
+             "Skipped by --no-matrices; pass 'none' to skip it alone.",
+    )
+    cont.add_argument(
+        "--cont-precision", dest="cont_precision", type=int, default=2,
+        metavar="N",
+        help="decimals written to the -w matrix (default: %(default)s, as in "
+             "trajcontacts 1.0.1)",
+    )
+    cont.add_argument(
+        "--condensed-out", dest="condensed_out", default=None, metavar="FILE",
+        help="also write the upper triangle of the continuous matrix, one "
+             "value per line in scipy squareform order, full precision",
     )
 
     perf = parser.add_argument_group("performance")
@@ -273,6 +355,17 @@ def _validate(args, parser):
         parser.error("-n/--nproc must be >= 1")
     if not 0.0 <= args.min_fraction <= 1.0:
         parser.error("--min-fraction must be between 0 and 1")
+    if args.mode in ("continuous", "both"):
+        if args.sigma is not None:
+            if not (args.sigma > 0 and np.isfinite(args.sigma)):
+                parser.error("--sigma must be positive")
+        else:
+            if not (args.dmax > args.cutoff and np.isfinite(args.dmax)):
+                parser.error("-d/--dmax must be larger than -c/--cutoff")
+            if not 0.0 < args.kval < 1.0:
+                parser.error("-k/--kval must be between 0 and 1 (exclusive)")
+        if not 0 <= args.cont_precision <= 17:
+            parser.error("--cont-precision must be between 0 and 17")
 
 
 def _log(quiet, message):
@@ -287,7 +380,13 @@ def main(argv=None):
 
     # Imported here so that --help and --version stay fast.
     import mdtraj as md
-    from .core import compute_contact_counts, heavy_atom_indices, make_pairs
+    from .core import (
+        compute_contact_counts,
+        compute_contacts_both,
+        compute_continuous_contacts,
+        heavy_atom_indices,
+        make_pairs,
+    )
     from . import io as tc_io
 
     started = time.time()
@@ -358,26 +457,83 @@ def main(argv=None):
             if done == total:
                 print("", file=sys.stderr, flush=True)
 
-    result = compute_contact_counts(
-        traj,
-        pairs,
-        cutoff_nm=args.cutoff / 10.0,
+    common = dict(
         periodic=args.periodic,
         n_processes=args.nproc,
         prefilter=args.prefilter,
         memory_budget=int(args.memory_gb * 1e9),
         progress=progress,
     )
+    continuous_kwargs = dict(
+        sigma_nm=None if args.sigma is None else args.sigma / 10.0,
+        d_max_nm=args.dmax / 10.0,
+        k_at_d_max=args.kval,
+        legacy_rounding=args.legacy_rounding,
+    )
+    result = continuous = None
+    if args.mode == "binary":
+        result = compute_contact_counts(
+            traj, pairs, cutoff_nm=args.cutoff / 10.0, **common
+        )
+    elif args.mode == "continuous":
+        continuous = compute_continuous_contacts(
+            traj, pairs, cutoff_nm=args.cutoff / 10.0,
+            **continuous_kwargs, **common,
+        )
+    else:
+        result, continuous = compute_contacts_both(
+            traj, pairs, cutoff_nm=args.cutoff / 10.0,
+            **continuous_kwargs, **common,
+        )
 
     fraction_cutoff = args.cutpercent / 100.0
-    n_observed = int((result.counts > 0).sum())
-    n_stable = int((result.fractions >= fraction_cutoff).sum())
-    _log(
-        args.quiet,
-        f"{n_observed} pairs in contact at least once; "
-        f"{n_stable} present in >= {args.cutpercent:g}% of frames",
-    )
+    if result is not None:
+        n_observed = int((result.counts > 0).sum())
+        n_stable = int((result.fractions >= fraction_cutoff).sum())
+        _log(
+            args.quiet,
+            f"{n_observed} pairs in contact at least once; "
+            f"{n_stable} present in >= {args.cutpercent:g}% of frames",
+        )
+    if continuous is not None:
+        n_weighted = int((continuous.sums > 0).sum())
+        _log(
+            args.quiet,
+            f"continuous: sigma = {continuous.sigma_nm * 10.0:.6g} A"
+            f"{', 1.0.1 rounding' if continuous.legacy_rounding else ''}; "
+            f"{n_weighted} pairs with non-zero mean weight",
+        )
 
+    written = []
+    if result is not None:
+        written.extend(_write_binary(args, tc_io, result, fraction_cutoff))
+    if continuous is not None:
+        if (
+            args.write_matrices
+            and args.cont_matrix_out
+            and args.cont_matrix_out.lower() != "none"
+        ):
+            tc_io.write_continuous_matrix(
+                args.cont_matrix_out, continuous,
+                fmt=f"%.{args.cont_precision}f",
+            )
+            written.append(args.cont_matrix_out)
+        if args.condensed_out:
+            tc_io.write_condensed(args.condensed_out, continuous)
+            written.append(args.condensed_out)
+    if args.npz_out:
+        tc_io.write_npz(
+            args.npz_out, result, fraction_cutoff, continuous=continuous
+        )
+        written.append(args.npz_out)
+
+    _log(args.quiet, "wrote: " + ", ".join(written))
+    _log(args.quiet, f"done in {time.time() - started:.1f} s")
+    return 0
+
+
+def _write_binary(args, tc_io, result, fraction_cutoff):
+    """Write the binary-contact outputs; returns the paths written."""
     written = []
     if args.pairs_out and args.pairs_out.lower() != "none":
         writer = (
@@ -397,13 +553,7 @@ def main(argv=None):
         written.extend(
             p for p in (args.counts_out, args.fraction_out, args.adjacency_out) if p
         )
-    if args.npz_out:
-        tc_io.write_npz(args.npz_out, result, fraction_cutoff)
-        written.append(args.npz_out)
-
-    _log(args.quiet, "wrote: " + ", ".join(written))
-    _log(args.quiet, f"done in {time.time() - started:.1f} s")
-    return 0
+    return written
 
 
 if __name__ == "__main__":

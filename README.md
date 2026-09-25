@@ -109,9 +109,11 @@ alongside them so results map back onto the original structure.
 | `contactMatrixFraction.dat` | `-z` | Weighted adjacency matrix (fraction of frames) |
 | `contact.dat` | `-o` | Unweighted adjacency matrix, 1 where fraction ≥ `-a` |
 | `result.npz` | `--npz` | All of the above in one compressed binary archive |
+| `contactMatrixFraction_continuous.dat` | `-w` | Mean continuous weights (`-m continuous`/`both` only, see below) |
+| *(off by default)* | `--condensed-out` | Upper triangle of the continuous matrix, `squareform` order |
 
 Pass `none` to `--numeric-out` to skip that file, or `--no-matrices` to skip
-the three dense matrices, which for large subsystems dominate both runtime and
+the dense matrices, which for large subsystems dominate both runtime and
 disk.
 
 Loading the archive in Python:
@@ -123,6 +125,102 @@ data = np.load("result.npz")
 pairs, fractions = data["pairs"], data["fractions"]
 stable = pairs[fractions >= 0.75]
 ```
+
+## Continuous contacts
+
+`-m continuous` (alias `cont`) replaces the in-contact-or-not indicator with a
+smooth "semi-Gaussian" weight of the same per-frame quantity, the minimum
+heavy-atom distance *d* between two residues:
+
+```
+K(d) = 1                                        d <= c
+K(d) = exp(-d²/2σ²) / exp(-c²/2σ²)
+     = exp(-(d² - c²) / 2σ²)                     d >  c
+
+σ    = sqrt((c² - d_max²) / (2 ln k))            so that K(d_max) = k
+```
+
+The weights are summed over frames and divided by the number of frames, so
+each matrix entry is in [0, 1] and never smaller than the binary contact
+fraction at the same cutoff (every frame in binary contact has weight 1).
+`-m both` computes the binary and the continuous result from a single
+distance pass.
+
+| Option | Meaning | Default |
+| --- | --- | --- |
+| `-c/--cutoff` | *c*, the distance up to which K = 1 (Å) | 4.5 |
+| `-d/--dmax` | *d_max* (Å) | 8.0 |
+| `-k/--kval` | *k* = K(*d_max*) | 1e-5 |
+| `--sigma` | σ in Å directly; overrides `-d`/`-k` | derived: 1.3784 Å |
+| `--legacy-rounding` | trajcontacts 1.0.1 arithmetic, each K rounded to 4 decimals | off |
+| `-w/--cmatfract-cont` | dense matrix of mean weights | `contactMatrixFraction_continuous.dat` |
+| `--cont-precision` | decimals in the `-w` file | 2 |
+| `--condensed-out` | condensed upper triangle, one value per line, `%.18e` | off |
+
+In `-m continuous` only the continuous outputs (and `--npz`) are written;
+the binary pair lists and matrices need `-m binary` (the default) or
+`-m both`. With `--npz`, the archive gains `cont_sums`, `cont_means`
+(aligned with `pairs`), `cont_cutoff_nm`, `cont_sigma_nm`, `cont_support_nm`
+and `cont_legacy_rounding`; the binary keys are unchanged, and are absent in
+`-m continuous`.
+
+**Numerics.** By default K is evaluated in float64 as
+`exp(-(d² - c²) / 2σ²)`. `--legacy-rounding` instead evaluates the exact
+1.0.1 expression, including its operand types (under NumPy 2, *d²* is formed
+in float32 from MDTraj's float32 distances and promoted to float64 by the
+float64 σ term) and `np.around(K, 4)`. The unrounded values of the two forms
+differ by up to ~2e-7; after rounding to 4 decimals that can flip the last
+digit, which is why the legacy path copies the expression rather than the
+formula.
+
+**Prefilter.** The exact pair prefilter keeps every pair that could come
+within the kernel's support rather than within *c*:
+
+- with `--legacy-rounding`, the distance beyond which K rounds to exactly 0
+  (0.7608 nm with the defaults), so the prefilter remains exact;
+- otherwise, the distance at which K = 1e-12 (1.119 nm with the defaults), so
+  each discarded frame changes a mean by less than 1e-12. `--no-prefilter`
+  evaluates every pair at every distance.
+
+The support used is recorded as `cont_support_nm` (infinite without the
+prefilter).
+
+### Reproducing trajcontacts 1.0.1
+
+```bash
+# trajcontacts 1.0.1:  trajcontacts -p top.pdb -f trajs.txt -m cont
+trajcontacts2 -p top.pdb -f trajs.txt -s all -m cont --legacy-rounding
+```
+
+`-w` then matches 1.0.1's `contactMatrixFraction_continuous.dat` byte for
+byte (checked for default and non-default `-c/-d/-k`, single and multiple
+trajectories). `-s all` because 1.0.1 used every residue; 1.0.1 always
+included i/i+1 neighbours, which is the `--min-separation 1` default. Two
+differences remain by design: 1.0.1 named the binary fraction matrix
+`contactMatrixFraction_normal.dat` (pass `-z contactMatrixFraction_normal.dat`
+to match), and 1.0.1's `-m both` corrupts its binary matrices when the
+trajectory list has more than one entry (the running binary matrix aliases the
+continuous one, so from the second trajectory on the "frame counts" contain
+the continuous sums of the first). trajcontacts2's binary output matches
+1.0.1's `-m norm`, which is unaffected.
+
+### Reproducing Westerlund et al. 2020
+
+The semi-binary contact map of Westerlund, Fleetwood, Pérez-Conesa and
+Delemotte's allopath code (`semi_Gaussian_kernel`: σ = 0.138 nm, c = 0.45 nm,
+protein heavy atoms, no periodic boundaries, all pairs *j* > *i*, mean over
+frames):
+
+```bash
+trajcontacts2 -p top.pdb -f traj.xtc -s protein -m cont --sigma 1.38 \
+    --no-periodic --condensed-out distance_matrix_semi_bin.txt
+```
+
+The condensed file has the layout of allopath's
+`distance_matrix_semi_bin_*.txt` (`squareform` order, `%.18e`). allopath
+evaluates `exp` in float32, so the two agree to about 1e-7; with its
+distances promoted to float64 they agree to 1e-12 (both checked in the test
+suite).
 
 ## Using it as a library
 
@@ -138,6 +236,22 @@ result = compute_contact_counts(traj, pairs, cutoff_nm=0.45)
 
 adjacency = result.adjacency_matrix(0.75)
 ```
+
+Continuous contacts, alone or together with the binary counts:
+
+```python
+from trajcontacts2 import compute_continuous_contacts, compute_contacts_both
+
+cont = compute_continuous_contacts(traj, pairs, cutoff_nm=0.45)   # sigma from d_max/k
+cont.means          # per pair, aligned with cont.pairs
+cont.matrix()       # dense symmetric matrix
+cont.condensed()    # np.triu_indices(n, 1) order, as scipy squareform
+
+binary, cont = compute_contacts_both(traj, pairs, 0.45, legacy_rounding=True)
+```
+
+`continuous_sigma`, `semi_gaussian_kernel` and `kernel_support` expose the
+kernel itself.
 
 To load several trajectory segments as a library user, pass a list of paths to
 `mdtraj.load()` directly, the same way the CLI's `-f` does:
@@ -174,7 +288,12 @@ with a chunked, prefiltered call to `mdtraj.compute_contacts`. On a
 | 0.1.3 | 17.4 s | 4 |
 | 0.2.0 | 0.8 s | 1 |
 
-Output is bit-identical. Because the distance kernel is now vectorised, `-n`
+Output is bit-identical. Version 0.4.0 additionally replaced
+`mdtraj.compute_contacts` itself with a vectorised equivalent (same
+`compute_distances` call, same atom pairs, minimum by `np.minimum.reduceat`):
+MDTraj's bookkeeping is quadratic in the number of pairs per block, so this is
+3-17x faster on 150-600 residue systems, again with bit-identical counts.
+Because the distance kernel is vectorised, `-n`
 usually makes little difference; raise it for very large systems, where the
 pair list rather than the kernel is the bottleneck.
 
@@ -210,7 +329,9 @@ pytest
 
 The test suite validates the optimised code against a brute-force transcription
 of the original algorithm, and checks that the prefilter, frame chunking and
-multiprocessing paths all give identical counts.
+multiprocessing paths all give identical counts. The continuous mode is
+checked against transcriptions of trajcontacts 1.0.1 (`--legacy-rounding`)
+and of the Westerlund et al. allopath kernel.
 
 ## Citation
 

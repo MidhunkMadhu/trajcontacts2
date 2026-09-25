@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.4.0
+
+### Added
+- Continuous ("semi-Gaussian") contacts, as in trajcontacts 1.0.1 `-m cont`
+  and Westerlund et al. 2020: per frame K(d) = 1 for d <= c and
+  exp(-(d^2 - c^2) / 2 sigma^2) beyond, with
+  sigma = sqrt((c^2 - d_max^2) / (2 ln k)); averaged over frames.
+  - CLI: `-m/--mode {binary,continuous,both}` (aliases `norm`, `cont`),
+    `-d/--dmax` (8.0 A), `-k/--kval` (1e-5), `--sigma` (A, overrides -d/-k),
+    `--legacy-rounding`, `-w/--cmatfract-cont`
+    (`contactMatrixFraction_continuous.dat`), `--cont-precision` (2),
+    `--condensed-out`. The default mode is `binary`, so existing command
+    lines produce the same files as before.
+  - Library: `compute_continuous_contacts`, `compute_contacts_both` (both
+    results from one distance pass), `ContinuousContactResult` (`means`,
+    `matrix()`, `condensed()`, `adjacency_matrix()`), `continuous_sigma`,
+    `semi_gaussian_kernel`, `kernel_support`.
+  - io: `write_continuous_matrix`, `write_condensed`; `write_npz` accepts a
+    `continuous=` result and adds `cont_sums`, `cont_means`, `cont_cutoff_nm`,
+    `cont_sigma_nm`, `cont_support_nm`, `cont_legacy_rounding`. Existing keys
+    are unchanged.
+  - `--legacy-rounding` reproduces 1.0.1's `contactMatrixFraction_continuous.dat`
+    byte for byte; the default kernel matches the allopath
+    `semi_Gaussian_kernel` (to float32 precision, which allopath uses for
+    `exp`).
+  - The exact prefilter uses the kernel's support (legacy: where the rounded
+    weight becomes 0; otherwise where it drops below 1e-12).
+
+### Changed
+- Per-pair minimum heavy-atom distances are computed with one vectorised
+  `mdtraj.compute_distances` call per pair block and `np.minimum.reduceat`,
+  instead of `mdtraj.compute_contacts`, whose atom-pair bookkeeping is a
+  Python loop with a prefix sum recomputed per pair (quadratic in the block
+  size). Same atom pairs, same distance routine, bit-identical results;
+  3-17x faster end to end on 150-600 residue test systems.
+- Worker results are accumulated in frame-chunk order (`imap` instead of
+  `imap_unordered`), so floating-point sums do not depend on scheduling.
+- `scipy` added to the `test` extra (used to check the condensed layout).
+
+### Notes
+- trajcontacts 1.0.1 `-m both` with more than one trajectory writes
+  corrupted binary matrices (its running binary matrix aliases the
+  continuous one). trajcontacts2 `-m both` is not affected; its binary output
+  equals 1.0.1 `-m norm`.
+
 ## 0.3.1
 
 ### Fixed

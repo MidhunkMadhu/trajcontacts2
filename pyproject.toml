@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trajcontacts2"
-version = "0.3.1"
+version = "0.4.0"
 description = "Residue-residue contacts from MD trajectories and PDB structures"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -43,7 +43,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=7.0"]
+test = ["pytest>=7.0", "scipy"]
 
 [project.urls]
 Homepage = "https://github.com/MidhunkMadhu/trajcontacts2"

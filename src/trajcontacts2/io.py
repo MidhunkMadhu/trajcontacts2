@@ -9,6 +9,8 @@ __all__ = [
     "write_legacy_pair_table",
     "write_legacy_numeric_table",
     "write_matrices",
+    "write_continuous_matrix",
+    "write_condensed",
     "write_npz",
 ]
 
@@ -100,20 +102,86 @@ def write_matrices(result, fraction_cutoff, counts_path, fraction_path, adjacenc
         )
 
 
-def write_npz(path, result, fraction_cutoff):
-    """Compressed binary archive: pairs, counts, fractions and residue labels."""
-    residues = result.residues
-    np.savez_compressed(
+def write_continuous_matrix(path, result, fmt="%.2f"):
+    """Dense symmetric matrix of mean continuous contact weights.
+
+    With the default ``fmt`` this is the layout of the trajcontacts 1.0.1
+    ``contactMatrixFraction_continuous.dat`` file.
+    """
+    np.savetxt(path, result.matrix(), fmt=fmt)
+
+
+def write_condensed(path, result, fmt="%.18e"):
+    """Upper triangle of the continuous matrix, one value per line.
+
+    Values are in ``np.triu_indices(n, 1)`` order, i.e. the condensed layout
+    of ``scipy.spatial.distance.squareform``, which is also how the
+    Westerlund et al. allopath code saves its semi-binary contact map. The
+    default ``fmt`` is ``np.savetxt``'s own default, as used there; a single
+    ``#`` comment line records the matrix size.
+    """
+    np.savetxt(
         path,
-        pairs=result.pairs,
-        counts=result.counts,
-        fractions=result.fractions,
-        adjacency=result.adjacency_matrix(fraction_cutoff),
-        n_frames=np.asarray(result.n_frames),
-        cutoff_nm=np.asarray(result.cutoff_nm),
-        fraction_cutoff=np.asarray(fraction_cutoff),
+        result.condensed(),
+        fmt=fmt,
+        header=(
+            f"n_residues = {result.n_residues}; "
+            "order = np.triu_indices(n_residues, 1)"
+        ),
+    )
+
+
+def _continuous_npz_entries(continuous):
+    return dict(
+        cont_sums=continuous.sums,
+        cont_means=continuous.means,
+        cont_cutoff_nm=np.asarray(continuous.cutoff_nm),
+        cont_sigma_nm=np.asarray(continuous.sigma_nm),
+        cont_support_nm=np.asarray(continuous.support_nm),
+        cont_legacy_rounding=np.asarray(bool(continuous.legacy_rounding)),
+    )
+
+
+def write_npz(path, result, fraction_cutoff, continuous=None):
+    """Compressed binary archive: pairs, counts, fractions and residue labels.
+
+    ``continuous`` is an optional :class:`~trajcontacts2.core.ContinuousContactResult`
+    whose arrays are added under ``cont_*`` keys (``cont_sums``, ``cont_means``
+    aligned with ``pairs``, plus the kernel parameters). ``result`` may be
+    ``None`` when only continuous contacts were computed; the binary keys
+    (``counts``, ``fractions``, ``adjacency``, ``cutoff_nm``,
+    ``fraction_cutoff``) are then omitted.
+    """
+    if result is None and continuous is None:
+        raise ValueError("write_npz needs a binary or a continuous result")
+    base = result if result is not None else continuous
+    if (
+        result is not None
+        and continuous is not None
+        and not np.array_equal(result.pairs, continuous.pairs)
+    ):
+        raise ValueError("binary and continuous results cover different pairs")
+
+    residues = base.residues
+    entries = dict(pairs=base.pairs)
+    if result is not None:
+        entries.update(
+            counts=result.counts,
+            fractions=result.fractions,
+            adjacency=result.adjacency_matrix(fraction_cutoff),
+        )
+    entries["n_frames"] = np.asarray(base.n_frames)
+    if result is not None:
+        entries.update(
+            cutoff_nm=np.asarray(result.cutoff_nm),
+            fraction_cutoff=np.asarray(fraction_cutoff),
+        )
+    entries.update(
         residue_index=np.asarray([r.index for r in residues]),
         residue_chain=np.asarray([r.chain for r in residues]),
         residue_seq=np.asarray([r.res_seq for r in residues]),
         residue_name=np.asarray([r.name for r in residues]),
     )
+    if continuous is not None:
+        entries.update(_continuous_npz_entries(continuous))
+    np.savez_compressed(path, **entries)
